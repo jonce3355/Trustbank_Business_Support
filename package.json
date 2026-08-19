@@ -1,0 +1,22 @@
+{
+  "name": "trustbank-support",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Trustbank Telegram Support System",
+  "main": "api/index.js",
+  "scripts": {
+    "start": "node api/index.js",
+    "dev": "node api/index.js",
+    "set-password": "node scripts/set-branch-password.js",
+    "set-webhooks": "node scripts/set-webhooks.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}
