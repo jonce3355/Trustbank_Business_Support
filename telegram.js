@@ -24,9 +24,27 @@ function makeApi(tokenEnvVar) {
     return data;
   }
 
+  // Загрузка бинарного файла (фото) требует multipart/form-data,
+  // а не JSON — поэтому отдельная функция.
+  async function sendPhoto(chatId, buffer, filename, mimeType, caption) {
+    const base = getBase();
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    if (caption) form.append('caption', caption);
+    form.append('photo', new Blob([buffer], { type: mimeType }), filename);
+    const res = await fetch(`${base}/sendPhoto`, { method: 'POST', body: form });
+    const data = await res.json();
+    if (!data.ok) {
+      console.error(`[Telegram/${tokenEnvVar}] sendPhoto failed: ${data.description}`);
+    }
+    return data;
+  }
+
   return {
     sendMessage: (chatId, text, extra = {}) =>
       call('sendMessage', { chat_id: chatId, text, ...extra }),
+    sendPhoto,
+    getFile: (fileId) => call('getFile', { file_id: fileId }),
     answerCallbackQuery: (callbackQueryId, text) =>
       call('answerCallbackQuery', { callback_query_id: callbackQueryId, text }),
     deleteMessage: (chatId, messageId) => call('deleteMessage', { chat_id: chatId, message_id: messageId }),

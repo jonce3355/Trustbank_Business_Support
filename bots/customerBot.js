@@ -33,6 +33,13 @@ async function handleMessage(message) {
   const chatId = message.chat.id;
   const userId = message.from.id;
   const text = (message.text || '').trim();
+  const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
+  const caption = (message.caption || '').trim();
+  const photoFileId = hasPhoto ? message.photo[message.photo.length - 1].file_id : null;
+
+  if (!hasPhoto && !text) {
+    return;
+  }
 
   if (text === '/start') {
     await db.query(
@@ -68,16 +75,18 @@ async function handleMessage(message) {
 
   if (activeTicket) {
     await db.query(
-      `insert into messages (ticket_id, sender_type, sender_id, text, telegram_message_id) values ($1,'CUSTOMER',$2,$3,$4)`,
-      [activeTicket.id, customer.id, text, message.message_id]
+      `insert into messages (ticket_id, sender_type, sender_id, text, telegram_message_id, attachment_type, attachment_id)
+       values ($1,'CUSTOMER',$2,$3,$4,$5,$6)`,
+      [activeTicket.id, customer.id, hasPhoto ? caption || null : text, message.message_id, hasPhoto ? 'photo' : null, photoFileId]
     );
     await db.query(`update tickets set updated_at = now() where id = $1`, [activeTicket.id]);
 
     if (activeTicket.assigned_employee_id) {
       const emp = (await db.query('select * from employees where id = $1', [activeTicket.assigned_employee_id])).rows[0];
       if (emp) {
+        const preview = hasPhoto ? `📷 Фото${caption ? `: ${caption}` : ''}` : text;
         employeeApi
-          .sendMessage(emp.telegram_chat_id, `Новое сообщение по обращению #${activeTicket.ticket_number}:\n\n${text}`)
+          .sendMessage(emp.telegram_chat_id, `Новое сообщение по обращению #${activeTicket.ticket_number}:\n\n${preview}`)
           .catch(() => {});
       }
     }
@@ -85,17 +94,19 @@ async function handleMessage(message) {
   }
 
   if (customer.state === 'AWAITING_MESSAGE' && customer.pending_category) {
+    const subjectSource = hasPhoto ? caption || 'Фото' : text;
     const ticket = (
       await db.query(
         `insert into tickets (customer_id, branch_id, category, subject, status)
          values ($1,$2,$3,$4,'NEW') returning *`,
-        [customer.id, customer.branch_id, customer.pending_category, text.slice(0, 300)]
+        [customer.id, customer.branch_id, customer.pending_category, subjectSource.slice(0, 300)]
       )
     ).rows[0];
 
     await db.query(
-      `insert into messages (ticket_id, sender_type, sender_id, text, telegram_message_id) values ($1,'CUSTOMER',$2,$3,$4)`,
-      [ticket.id, customer.id, text, message.message_id]
+      `insert into messages (ticket_id, sender_type, sender_id, text, telegram_message_id, attachment_type, attachment_id)
+       values ($1,'CUSTOMER',$2,$3,$4,$5,$6)`,
+      [ticket.id, customer.id, hasPhoto ? caption || null : text, message.message_id, hasPhoto ? 'photo' : null, photoFileId]
     );
 
     await db.query(`update customers set state = 'READY', pending_category = null where id = $1`, [customer.id]);

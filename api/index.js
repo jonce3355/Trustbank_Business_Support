@@ -8,7 +8,8 @@ const employeeBot = require('../bots/employeeBot');
 const apiRoutes = require('../routes/api');
 
 const app = express();
-app.use(express.json());
+// Лимит поднят под base64-фото (до 3 МБ файла ≈ 4 МБ в base64 + запас на JSON).
+app.use(express.json({ limit: '6mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.get('/health', async (req, res) => {

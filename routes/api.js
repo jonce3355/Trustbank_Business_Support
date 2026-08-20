@@ -197,6 +197,91 @@ router.post(
   })
 );
 
+const MAX_PHOTO_BYTES = 3 * 1024 * 1024; // 3 МБ — с запасом под лимит тела запроса на Vercel (~4.5 МБ)
+const ALLOWED_PHOTO_TYPES = ['image/jpeg', 'image/png'];
+
+router.post(
+  '/tickets/:id/photo',
+  ah(loadTicketScoped),
+  ah(async (req, res) => {
+    const { image, mimeType, caption } = req.body;
+    if (req.ticket.status === 'CLOSED') {
+      return res.status(400).json({ error: 'Обращение закрыто, отправка сообщений недоступна.' });
+    }
+    if (!image || !ALLOWED_PHOTO_TYPES.includes(mimeType)) {
+      return res.status(400).json({ error: 'Поддерживаются только файлы JPG и PNG.' });
+    }
+
+    const buffer = Buffer.from(image, 'base64');
+    if (buffer.length > MAX_PHOTO_BYTES) {
+      return res.status(400).json({ error: 'Файл слишком большой (максимум 3 МБ).' });
+    }
+
+    const filename = mimeType === 'image/png' ? 'photo.png' : 'photo.jpg';
+    const sent = await customerApi.sendPhoto(req.ticket.customer_chat_id, buffer, filename, mimeType, caption || undefined);
+    if (!sent.ok || !sent.result || !sent.result.photo || !sent.result.photo.length) {
+      return res.status(502).json({ error: 'Не удалось отправить фото клиенту. Попробуйте ещё раз.' });
+    }
+    const sizes = sent.result.photo;
+    const fileId = sizes[sizes.length - 1].file_id;
+
+    await db.query(
+      `insert into messages (ticket_id, sender_type, sender_id, text, attachment_type, attachment_id)
+       values ($1,'EMPLOYEE',$2,$3,'photo',$4)`,
+      [req.ticket.id, req.employee.id, caption || null, fileId]
+    );
+
+    const updates = ['updated_at = now()'];
+    if (!req.ticket.first_response_at) {
+      updates.push('first_response_at = now()');
+      updates.push('first_response_seconds = extract(epoch from (now() - created_at))::int');
+    }
+    await db.query(`update tickets set ${updates.join(', ')} where id = $1`, [req.ticket.id]);
+
+    await db.query(`insert into audit_logs (actor_employee_id, action, entity_type, entity_id) values ($1,'PHOTO_SENT','ticket',$2)`, [
+      req.employee.id,
+      req.ticket.id,
+    ]);
+
+    res.json({ ok: true });
+  })
+);
+
+// Отдаёт содержимое фото, храня доступ к нему через ту же проверку
+// филиала, что и остальные данные обращения. Токен бота остаётся
+// только на сервере — фронтенду отдаются лишь байты изображения.
+router.get(
+  '/files/:messageId',
+  ah(async (req, res) => {
+    const message = (
+      await db.query(
+        `select m.*, t.branch_id from messages m join tickets t on t.id = m.ticket_id where m.id = $1`,
+        [req.params.messageId]
+      )
+    ).rows[0];
+    if (!message || message.attachment_type !== 'photo') {
+      return res.status(404).json({ error: 'Файл не найден.' });
+    }
+    if (req.employee.role !== 'SUPER_ADMIN' && message.branch_id !== req.employee.branch_id) {
+      return res.status(403).json({ error: 'Доступ запрещён.' });
+    }
+
+    const fileInfo = await customerApi.getFile(message.attachment_id);
+    if (!fileInfo.ok) {
+      return res.status(502).json({ error: 'Не удалось получить файл из Telegram.' });
+    }
+
+    const fileRes = await fetch(`https://api.telegram.org/file/bot${process.env.CUSTOMER_BOT_TOKEN}/${fileInfo.result.file_path}`);
+    if (!fileRes.ok) {
+      return res.status(502).json({ error: 'Не удалось скачать файл.' });
+    }
+
+    res.set('Content-Type', fileRes.headers.get('content-type') || 'image/jpeg');
+    res.set('Cache-Control', 'private, max-age=3600');
+    res.send(Buffer.from(await fileRes.arrayBuffer()));
+  })
+);
+
 router.post(
   '/tickets/:id/status',
   ah(loadTicketScoped),
