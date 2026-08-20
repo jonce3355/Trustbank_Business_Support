@@ -27,6 +27,7 @@
     counts: { NEW: 0, IN_PROGRESS: 0, WAITING_FOR_CLIENT: 0, RESOLVED: 0, CLOSED: 0 },
     currentTicket: null,
     currentMessages: [],
+    pendingPhoto: null,
     adminTab: 'overview',
     adminOverview: null,
     adminBranches: [],
@@ -223,12 +224,34 @@
   function messageBubbleHtml(m) {
     const cls = m.sender_type === 'CUSTOMER' ? 'bubble-customer' : m.sender_type === 'EMPLOYEE' ? 'bubble-employee' : 'bubble-system';
     const who = m.sender_type === 'CUSTOMER' ? 'Клиент' : m.sender_type === 'EMPLOYEE' ? 'Сотрудник' : 'Система';
+    const photoHtml = m.attachment_type === 'photo' ? `<img class="bubble-photo" data-message-id="${m.id}" alt="Фото" />` : '';
+    const textHtml = m.text ? `<div class="bubble-text">${esc(m.text)}</div>` : '';
     return `
       <div class="bubble ${cls}">
         <div class="bubble-who">${who}</div>
-        <div class="bubble-text">${esc(m.text)}</div>
+        ${photoHtml}
+        ${textHtml}
         <div class="bubble-time">${formatTime(m.created_at)}</div>
       </div>`;
+  }
+
+  // <img> не может отправлять свои заголовки, а /api/files/:id защищён
+  // Telegram initData — поэтому подгружаем фото через fetch и подставляем
+  // готовый blob-адрес.
+  function loadPhotoImages() {
+    const tg = window.Telegram && window.Telegram.WebApp;
+    const initData = tg ? tg.initData : '';
+    app.querySelectorAll('img[data-message-id]').forEach(async (img) => {
+      const id = img.getAttribute('data-message-id');
+      try {
+        const res = await fetch('/api/files/' + id, { headers: { 'X-Telegram-Init-Data': initData || '' } });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        img.src = url;
+        img.onclick = () => window.open(url, '_blank');
+      } catch (e) {}
+    });
   }
 
   function renderTicketScreen() {
@@ -256,7 +279,17 @@
       </div>
       ${
         !isClosed
-          ? `<div class="reply-box">
+          ? `${
+              state.pendingPhoto
+                ? `<div class="photo-preview">
+                    <img src="${state.pendingPhoto.dataUrl}" alt="Предпросмотр" />
+                    <button class="mini-btn danger" onclick="App.clearPendingPhoto()">Убрать фото</button>
+                  </div>`
+                : ''
+            }
+            <div class="reply-box">
+              <input type="file" id="photoInput" accept="image/png,image/jpeg" style="display:none" onchange="App.onPhotoSelected(this)" />
+              <button class="attach-btn" onclick="App.pickPhoto()" title="Прикрепить фото">📎</button>
               <textarea id="replyText" placeholder="Написать сообщение..."></textarea>
               <button class="send-btn" onclick="App.sendMessage()">Отправить</button>
             </div>`
@@ -265,6 +298,7 @@
 
     const messagesEl = app.querySelector('.messages');
     if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
+    loadPhotoImages();
   }
 
   async function openTicket(id) {
@@ -312,6 +346,22 @@
   async function sendMessage() {
     const textarea = document.getElementById('replyText');
     const text = textarea ? textarea.value.trim() : '';
+
+    if (state.pendingPhoto) {
+      try {
+        const base64 = state.pendingPhoto.dataUrl.split(',')[1];
+        await api('/tickets/' + state.currentTicket.id + '/photo', {
+          method: 'POST',
+          body: { image: base64, mimeType: state.pendingPhoto.mimeType, caption: text || undefined },
+        });
+        state.pendingPhoto = null;
+        await reloadCurrentTicket();
+      } catch (e) {
+        alert(e.message);
+      }
+      return;
+    }
+
     if (!text) return;
     try {
       await api('/tickets/' + state.currentTicket.id + '/message', { method: 'POST', body: { text } });
@@ -319,6 +369,37 @@
     } catch (e) {
       alert(e.message);
     }
+  }
+
+  function pickPhoto() {
+    const input = document.getElementById('photoInput');
+    if (input) input.click();
+  }
+
+  function onPhotoSelected(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    if (!['image/jpeg', 'image/png'].includes(file.type)) {
+      alert('Поддерживаются только файлы JPG и PNG.');
+      input.value = '';
+      return;
+    }
+    if (file.size > 3 * 1024 * 1024) {
+      alert('Файл слишком большой (максимум 3 МБ).');
+      input.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.pendingPhoto = { dataUrl: reader.result, mimeType: file.type };
+      render();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function clearPendingPhoto() {
+    state.pendingPhoto = null;
+    render();
   }
 
   // ---------------- Админ-панель ----------------
@@ -384,6 +465,10 @@
               `<div class="admin-list-row"><span>${esc(e.name)} (${esc(e.branch_code)})</span><span>${e.ticket_count} обращений · ${formatDuration(e.avg_resolution)}</span></div>`
           )
           .join('')}
+      </div>
+      <div class="section-title">Обслуживание</div>
+      <div class="new-branch-form">
+        <button class="action-btn danger" onclick="App.cleanupOldMessages()">Удалить сообщения старше 30 дней</button>
       </div>`;
   }
 
@@ -450,6 +535,11 @@
                   ? `<button class="mini-btn danger" onclick="App.blockEmployee(${e.id})">Заблокировать</button>`
                   : `<button class="mini-btn" onclick="App.unblockEmployee(${e.id})">Разблокировать</button>`
               }
+              ${
+                e.role === 'SUPER_ADMIN'
+                  ? `<button class="mini-btn" onclick="App.demoteEmployee(${e.id})">Снять права админа</button>`
+                  : `<button class="mini-btn" onclick="App.promoteEmployee(${e.id})">Сделать супер-админом</button>`
+              }
             </div>
           </div>`
           )
@@ -471,6 +561,36 @@
     try {
       await api('/admin/employees/' + id + '/unblock', { method: 'POST' });
       await loadAdminTab('employees');
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  async function promoteEmployee(id) {
+    if (!confirm('Назначить этого сотрудника супер-администратором? Он получит доступ ко всем филиалам и обращениям.')) return;
+    try {
+      await api('/admin/employees/' + id + '/role', { method: 'POST', body: { role: 'SUPER_ADMIN' } });
+      await loadAdminTab('employees');
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  async function demoteEmployee(id) {
+    if (!confirm('Снять права супер-администратора у этого сотрудника?')) return;
+    try {
+      await api('/admin/employees/' + id + '/role', { method: 'POST', body: { role: 'EMPLOYEE' } });
+      await loadAdminTab('employees');
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  async function cleanupOldMessages() {
+    if (!confirm('Удалить все сообщения старше 30 дней? Обращения и статистика останутся, удалится только текст переписки.')) return;
+    try {
+      const result = await api('/admin/messages/cleanup', { method: 'POST' });
+      alert(`Удалено сообщений: ${result.deleted}`);
     } catch (e) {
       alert(e.message);
     }
@@ -535,12 +655,18 @@
     claimTicket,
     setStatus,
     sendMessage,
+    pickPhoto,
+    onPhotoSelected,
+    clearPendingPhoto,
     goAdmin,
     setAdminTab,
     createBranch,
     createBranchPassword,
     blockEmployee,
     unblockEmployee,
+    promoteEmployee,
+    demoteEmployee,
+    cleanupOldMessages,
   };
 
   init();
