@@ -400,6 +400,25 @@ router.post(
 );
 
 router.post(
+  '/admin/employees/:id/role',
+  ah(async (req, res) => {
+    const { role } = req.body;
+    if (!['EMPLOYEE', 'SUPER_ADMIN'].includes(role)) {
+      return res.status(400).json({ error: 'Недопустимая роль.' });
+    }
+    if (Number(req.params.id) === req.employee.id) {
+      return res.status(400).json({ error: 'Нельзя изменить собственную роль.' });
+    }
+    await db.query('update employees set role = $1 where id = $2', [role, req.params.id]);
+    await db.query(
+      `insert into audit_logs (actor_employee_id, action, entity_type, entity_id, meta) values ($1,'EMPLOYEE_ROLE_CHANGED','employee',$2,$3)`,
+      [req.employee.id, req.params.id, JSON.stringify({ role })]
+    );
+    res.json({ ok: true });
+  })
+);
+
+router.post(
   '/admin/employees/:id/branch',
   ah(async (req, res) => {
     const { branch_id } = req.body;
@@ -430,6 +449,19 @@ router.post(
       [req.employee.id, req.params.id, JSON.stringify({ employee_id })]
     );
     res.json({ ok: true });
+  })
+);
+
+// Удаляет сообщения старше 30 дней (сами обращения и статистика по ним остаются).
+router.post(
+  '/admin/messages/cleanup',
+  ah(async (req, res) => {
+    const result = await db.query(`delete from messages where created_at < now() - interval '30 days'`);
+    await db.query(
+      `insert into audit_logs (actor_employee_id, action, meta) values ($1,'MESSAGES_CLEANUP',$2)`,
+      [req.employee.id, JSON.stringify({ deleted: result.rowCount })]
+    );
+    res.json({ ok: true, deleted: result.rowCount });
   })
 );
 
