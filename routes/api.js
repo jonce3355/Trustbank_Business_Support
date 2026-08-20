@@ -94,7 +94,8 @@ router.get(
 
     const where = conditions.length ? `where ${conditions.join(' and ')}` : '';
     const result = await db.query(
-      `select t.*, c.company_name, c.telegram_chat_id as customer_chat_id,
+      `select t.*, coalesce(nullif(c.company_name, ''), c.full_name) as company_name,
+              c.phone as customer_phone, c.inn as customer_inn, c.telegram_chat_id as customer_chat_id,
               e.name as assigned_employee_name, b.code as branch_code,
               (
                 select coalesce(nullif(m.text, ''), case when m.attachment_type = 'photo' then '📷 Фото' else null end)
@@ -135,7 +136,8 @@ router.get(
 async function loadTicketScoped(req, res, next) {
   const ticket = (
     await db.query(
-      `select t.*, c.company_name, c.telegram_chat_id as customer_chat_id
+      `select t.*, coalesce(nullif(c.company_name, ''), c.full_name) as company_name,
+              c.phone as customer_phone, c.inn as customer_inn, c.telegram_chat_id as customer_chat_id
        from tickets t join customers c on c.id = t.customer_id where t.id = $1`,
       [req.params.id]
     )
@@ -319,6 +321,16 @@ router.post(
       `insert into audit_logs (actor_employee_id, action, entity_type, entity_id, meta) values ($1,'STATUS_CHANGED','ticket',$2,$3)`,
       [req.employee.id, req.ticket.id, JSON.stringify({ status })]
     );
+
+    if (status === 'CLOSED') {
+      customerApi
+        .sendMessage(
+          req.ticket.customer_chat_id,
+          `Ваше обращение #${req.ticket.ticket_number} закрыто.\n\nЕсли у вас появится новый вопрос — просто напишите нам, и мы создадим новое обращение.`
+        )
+        .catch(() => {});
+    }
+
     res.json({ ok: true });
   })
 );

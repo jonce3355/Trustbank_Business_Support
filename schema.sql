@@ -61,10 +61,20 @@ create table if not exists customers (
   telegram_chat_id bigint not null,
   branch_id integer references branches(id),
   company_name text,
+  full_name text,
+  phone text,
+  inn text,
   state varchar(20) not null default 'AWAITING_BRANCH',
   pending_category text,
   created_at timestamptz not null default now()
 );
+
+-- Миграция для БАЗ, СОЗДАННЫХ ДО этой версии schema.sql: если таблица
+-- customers уже существует без этих колонок — добавляем их. Команда
+-- безопасна для повторного запуска (IF NOT EXISTS), ничего не удаляет.
+alter table customers add column if not exists full_name text;
+alter table customers add column if not exists phone text;
+alter table customers add column if not exists inn text;
 
 -- Номера обращений начинаются с 10001
 create sequence if not exists ticket_number_seq start 10001;

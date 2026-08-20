@@ -802,6 +802,8 @@
           </div>
           <div class="info-list">
             <div class="info-row"><span class="info-row-label">Клиент</span><span class="info-row-value">${esc(t.company_name || '—')}</span></div>
+            ${t.customer_phone ? `<div class="info-row"><span class="info-row-label">Телефон</span><span class="info-row-value">${esc(t.customer_phone)}</span></div>` : ''}
+            ${t.customer_inn ? `<div class="info-row"><span class="info-row-label">ИНН</span><span class="info-row-value">${esc(t.customer_inn)}</span></div>` : ''}
             <div class="info-row"><span class="info-row-label">Филиал</span><span class="info-row-value">${esc(t.branch_code || '—')}</span></div>
             <div class="info-row"><span class="info-row-label">Категория</span><span class="info-row-value">${esc(t.category || '—')}</span></div>
             <div class="info-row"><span class="info-row-label">Создано</span><span class="info-row-value">${formatFullDate(t.created_at)}</span></div>
