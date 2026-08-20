@@ -54,6 +54,12 @@ router.get(
       name: req.employee.name,
       role: req.employee.role,
       branch: branch ? { id: branch.id, code: branch.code, name: branch.name } : null,
+      // Пороги SLA нужны фронтенду, чтобы показывать SLA-таймер по
+      // каждому тикету не только супер-администратору, но и рядовому
+      // сотруднику (эти же числа и так не секретны — уже видны в
+      // /admin/sla).
+      firstResponseSlaMinutes: Number(process.env.FIRST_RESPONSE_SLA_MINUTES) || 15,
+      resolutionSlaMinutes: Number(process.env.RESOLUTION_SLA_MINUTES) || 240,
     });
   })
 );
@@ -89,7 +95,14 @@ router.get(
     const where = conditions.length ? `where ${conditions.join(' and ')}` : '';
     const result = await db.query(
       `select t.*, c.company_name, c.telegram_chat_id as customer_chat_id,
-              e.name as assigned_employee_name, b.code as branch_code
+              e.name as assigned_employee_name, b.code as branch_code,
+              (
+                select coalesce(nullif(m.text, ''), case when m.attachment_type = 'photo' then '📷 Фото' else null end)
+                from messages m
+                where m.ticket_id = t.id
+                order by m.created_at desc
+                limit 1
+              ) as last_message_text
        from tickets t
        join customers c on c.id = t.customer_id
        join branches b on b.id = t.branch_id
