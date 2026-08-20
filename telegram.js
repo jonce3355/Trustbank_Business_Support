@@ -29,6 +29,7 @@ function makeApi(tokenEnvVar) {
       call('sendMessage', { chat_id: chatId, text, ...extra }),
     answerCallbackQuery: (callbackQueryId, text) =>
       call('answerCallbackQuery', { callback_query_id: callbackQueryId, text }),
+    deleteMessage: (chatId, messageId) => call('deleteMessage', { chat_id: chatId, message_id: messageId }),
     setWebhook: (url) => call('setWebhook', { url }),
     getMe: () => call('getMe', {}),
   };

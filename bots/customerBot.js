@@ -147,6 +147,7 @@ async function handleCallback(cb) {
     await customerApi.sendMessage(chatId, `Филиал выбран: ${branch.code} — ${branch.name}\n\nВыберите категорию вашего обращения.`, {
       reply_markup: categoryKeyboard(),
     });
+    customerApi.deleteMessage(chatId, cb.message.message_id).catch(() => {});
     return;
   }
 
@@ -161,6 +162,7 @@ async function handleCallback(cb) {
     await db.query(`update customers set state = 'AWAITING_MESSAGE', pending_category = $1 where id = $2`, [category, customer.id]);
     await customerApi.answerCallbackQuery(cb.id);
     await customerApi.sendMessage(chatId, `Категория: ${category}\n\nОпишите вашу проблему одним сообщением.`);
+    customerApi.deleteMessage(chatId, cb.message.message_id).catch(() => {});
     return;
   }
 }
