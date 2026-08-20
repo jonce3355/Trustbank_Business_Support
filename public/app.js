@@ -384,6 +384,10 @@
               `<div class="admin-list-row"><span>${esc(e.name)} (${esc(e.branch_code)})</span><span>${e.ticket_count} обращений · ${formatDuration(e.avg_resolution)}</span></div>`
           )
           .join('')}
+      </div>
+      <div class="section-title">Обслуживание</div>
+      <div class="new-branch-form">
+        <button class="action-btn danger" onclick="App.cleanupOldMessages()">Удалить сообщения старше 30 дней</button>
       </div>`;
   }
 
@@ -450,6 +454,11 @@
                   ? `<button class="mini-btn danger" onclick="App.blockEmployee(${e.id})">Заблокировать</button>`
                   : `<button class="mini-btn" onclick="App.unblockEmployee(${e.id})">Разблокировать</button>`
               }
+              ${
+                e.role === 'SUPER_ADMIN'
+                  ? `<button class="mini-btn" onclick="App.demoteEmployee(${e.id})">Снять права админа</button>`
+                  : `<button class="mini-btn" onclick="App.promoteEmployee(${e.id})">Сделать супер-админом</button>`
+              }
             </div>
           </div>`
           )
@@ -471,6 +480,36 @@
     try {
       await api('/admin/employees/' + id + '/unblock', { method: 'POST' });
       await loadAdminTab('employees');
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  async function promoteEmployee(id) {
+    if (!confirm('Назначить этого сотрудника супер-администратором? Он получит доступ ко всем филиалам и обращениям.')) return;
+    try {
+      await api('/admin/employees/' + id + '/role', { method: 'POST', body: { role: 'SUPER_ADMIN' } });
+      await loadAdminTab('employees');
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  async function demoteEmployee(id) {
+    if (!confirm('Снять права супер-администратора у этого сотрудника?')) return;
+    try {
+      await api('/admin/employees/' + id + '/role', { method: 'POST', body: { role: 'EMPLOYEE' } });
+      await loadAdminTab('employees');
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
+  async function cleanupOldMessages() {
+    if (!confirm('Удалить все сообщения старше 30 дней? Обращения и статистика останутся, удалится только текст переписки.')) return;
+    try {
+      const result = await api('/admin/messages/cleanup', { method: 'POST' });
+      alert(`Удалено сообщений: ${result.deleted}`);
     } catch (e) {
       alert(e.message);
     }
@@ -541,6 +580,9 @@
     createBranchPassword,
     blockEmployee,
     unblockEmployee,
+    promoteEmployee,
+    demoteEmployee,
+    cleanupOldMessages,
   };
 
   init();
