@@ -24,25 +24,28 @@ function branchKeyboard(branches) {
 }
 
 // Верхний уровень: группа с под-пунктами открывает второй экран
-// (categorygroup:), группа без под-пунктов (например "Зарплата")
-// сразу создаёт категорию (category:).
+// (categorygroup:<индекс группы>), группа без под-пунктов (например
+// "Зарплата") сразу создаёт категорию (category:<индекс группы>).
+//
+// В callback_data передаются именно числовые индексы, а не текст
+// категории — у Telegram жёсткий лимит в 64 байта на callback_data,
+// а у некоторых пунктов (например "Пополнение корпоративной карты")
+// сам текст с запасом в него не укладывается. Индекс всегда короткий.
 function categoryGroupKeyboard() {
   return {
     inline_keyboard: [
-      ...CATEGORY_GROUPS.map((g) => [
-        { text: g.name, callback_data: g.items ? `categorygroup:${g.name}` : `category:${g.name}` },
-      ]),
+      ...CATEGORY_GROUPS.map((g, i) => [{ text: g.name, callback_data: g.items ? `categorygroup:${i}` : `category:${i}` }]),
       [PROFILE_BUTTON],
     ],
   };
 }
 
-function categorySubKeyboard(groupName) {
-  const group = CATEGORY_GROUPS.find((g) => g.name === groupName);
+function categorySubKeyboard(groupIndex) {
+  const group = CATEGORY_GROUPS[groupIndex];
   if (!group || !group.items) return categoryGroupKeyboard();
   return {
     inline_keyboard: [
-      ...group.items.map((item) => [{ text: item, callback_data: `category:${item}` }]),
+      ...group.items.map((item, j) => [{ text: item, callback_data: `category:${groupIndex}:${j}` }]),
       [{ text: '⬅️ Назад', callback_data: 'categorygroup:back' }],
     ],
   };
@@ -380,7 +383,7 @@ async function handleCallback(cb) {
   }
 
   if (data.startsWith('categorygroup:')) {
-    const groupName = data.slice('categorygroup:'.length);
+    const raw = data.slice('categorygroup:'.length);
     const customer = await getCustomer(userId);
     if (!customer || customer.state !== 'AWAITING_CATEGORY') {
       await customerApi.answerCallbackQuery(cb.id);
@@ -388,21 +391,32 @@ async function handleCallback(cb) {
       return;
     }
     await customerApi.answerCallbackQuery(cb.id);
-    if (groupName === 'back') {
+    if (raw === 'back') {
       await customerApi.sendMessage(chatId, 'Выберите категорию вашего обращения.', { reply_markup: categoryGroupKeyboard() });
     } else {
-      await customerApi.sendMessage(chatId, `${groupName} — выберите конкретный пункт:`, { reply_markup: categorySubKeyboard(groupName) });
+      const groupIndex = Number(raw);
+      const group = CATEGORY_GROUPS[groupIndex];
+      await customerApi.sendMessage(chatId, `${group ? group.name : 'Категория'} — выберите конкретный пункт:`, {
+        reply_markup: categorySubKeyboard(groupIndex),
+      });
     }
     customerApi.deleteMessage(chatId, cb.message.message_id).catch(() => {});
     return;
   }
 
   if (data.startsWith('category:')) {
-    const category = data.slice('category:'.length);
+    const [groupIndexRaw, itemIndexRaw] = data.slice('category:'.length).split(':');
+    const group = CATEGORY_GROUPS[Number(groupIndexRaw)];
+    const category = itemIndexRaw !== undefined ? group && group.items && group.items[Number(itemIndexRaw)] : group && group.name;
+
     const customer = await getCustomer(userId);
     if (!customer || customer.state !== 'AWAITING_CATEGORY') {
       await customerApi.answerCallbackQuery(cb.id);
       await customerApi.sendMessage(chatId, 'Сначала выберите филиал командой /start.');
+      return;
+    }
+    if (!category) {
+      await customerApi.answerCallbackQuery(cb.id, 'Категория не найдена');
       return;
     }
     await db.query(`update customers set state = 'AWAITING_MESSAGE', pending_category = $1 where id = $2`, [category, customer.id]);
