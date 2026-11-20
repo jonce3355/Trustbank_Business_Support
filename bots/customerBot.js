@@ -13,7 +13,7 @@
 
 const db = require('../db');
 const { customerApi, employeeApi } = require('../telegram');
-const { CATEGORIES } = require('../categories');
+const { CATEGORY_GROUPS } = require('../categories');
 
 const PROFILE_BUTTON = { text: '👤 Мой профиль', callback_data: 'profile:view' };
 
@@ -23,9 +23,28 @@ function branchKeyboard(branches) {
   };
 }
 
-function categoryKeyboard() {
+// Верхний уровень: группа с под-пунктами открывает второй экран
+// (categorygroup:), группа без под-пунктов (например "Зарплата")
+// сразу создаёт категорию (category:).
+function categoryGroupKeyboard() {
   return {
-    inline_keyboard: [...CATEGORIES.map((c) => [{ text: c, callback_data: `category:${c}` }]), [PROFILE_BUTTON]],
+    inline_keyboard: [
+      ...CATEGORY_GROUPS.map((g) => [
+        { text: g.name, callback_data: g.items ? `categorygroup:${g.name}` : `category:${g.name}` },
+      ]),
+      [PROFILE_BUTTON],
+    ],
+  };
+}
+
+function categorySubKeyboard(groupName) {
+  const group = CATEGORY_GROUPS.find((g) => g.name === groupName);
+  if (!group || !group.items) return categoryGroupKeyboard();
+  return {
+    inline_keyboard: [
+      ...group.items.map((item) => [{ text: item, callback_data: `category:${item}` }]),
+      [{ text: '⬅️ Назад', callback_data: 'categorygroup:back' }],
+    ],
   };
 }
 
@@ -134,7 +153,7 @@ async function handleMessage(message) {
     await customerApi.sendMessage(
       chatId,
       `С возвращением, ${customer.full_name}!\n\nФилиал: ${branch ? `${branch.code} — ${branch.name}` : '—'}\n\nВыберите категорию нового обращения.`,
-      { reply_markup: categoryKeyboard() }
+      { reply_markup: categoryGroupKeyboard() }
     );
     return;
   }
@@ -354,9 +373,27 @@ async function handleCallback(cb) {
       await sendProfileView(chatId, await getCustomer(userId));
     } else {
       await customerApi.sendMessage(chatId, `Филиал выбран: ${branch.code} — ${branch.name}\n\nВыберите категорию вашего обращения.`, {
-        reply_markup: categoryKeyboard(),
+        reply_markup: categoryGroupKeyboard(),
       });
     }
+    return;
+  }
+
+  if (data.startsWith('categorygroup:')) {
+    const groupName = data.slice('categorygroup:'.length);
+    const customer = await getCustomer(userId);
+    if (!customer || customer.state !== 'AWAITING_CATEGORY') {
+      await customerApi.answerCallbackQuery(cb.id);
+      await customerApi.sendMessage(chatId, 'Сначала выберите филиал командой /start.');
+      return;
+    }
+    await customerApi.answerCallbackQuery(cb.id);
+    if (groupName === 'back') {
+      await customerApi.sendMessage(chatId, 'Выберите категорию вашего обращения.', { reply_markup: categoryGroupKeyboard() });
+    } else {
+      await customerApi.sendMessage(chatId, `${groupName} — выберите конкретный пункт:`, { reply_markup: categorySubKeyboard(groupName) });
+    }
+    customerApi.deleteMessage(chatId, cb.message.message_id).catch(() => {});
     return;
   }
 
